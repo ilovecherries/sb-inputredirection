@@ -5,9 +5,9 @@ from time import sleep
 from queue import Queue
 from threading import Thread
 
-HOST = "[REDACTED]"
+HOST = "10.0.0.58"
 PORT = 4950
-BUFFER_TIME = 0.2
+BUFFER_TIME = 0.03
 
 def BIT(x):
 	return 1 << x
@@ -129,27 +129,26 @@ class Connection:
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		self.socket.connect((host, PORT))
 		self.queue = Queue()
+		self.ready_queue = Queue()
 		def loop(q):
 			while True:
-				ev = q.get()
-				print(ev)
-				if ev["type"] == "clear_touch":
-					self.touch.reset()
-					self.send_buffer()
-				elif ev["type"] == "touch":
-					self.touch.reset()
-					self.touch.x = ev["x"]
-					self.touch.y = ev["y"]
-					self.touch.touching = True
-					self.send_buffer()
-				if ev["type"] == "clear_button":
-					sleep(BUFFER_TIME)
-					self.touch.reset()
-					self.send_buffer()
-				elif ev["type"] == 'button':
-					self.buttons.reset()
-					self.buttons.set_button(ev['button'], True)
-					self.send_buffer()
+				if not q.empty():
+					ev = q.get()
+					print(ev)
+					if ev["type"] == "clear_touch":
+						self.touch.reset()
+					elif ev["type"] == "touch":
+						self.touch.reset()
+						self.touch.x = ev["x"]
+						self.touch.y = ev["y"]
+						self.touch.touching = True
+					if ev["type"] == "clear_button":
+						self.buttons.reset()
+					elif ev["type"] == 'button':
+						self.buttons.reset()
+						self.buttons.set_button(ev['button'], True)
+				self.send_buffer()
+				sleep(BUFFER_TIME)
 		self.thread = Thread(target=loop, args = (self.queue, ))
 		self.thread.start()
 	
@@ -170,6 +169,9 @@ class Connection:
 		self.queue.put({
 			"type": "button",
 			"button": button
+		})
+		self.queue.put({
+			"type": "clear_button"
 		})
 	
 	def send_touch(self, x: int, y: int):
@@ -202,6 +204,14 @@ if __name__ == '__main__':
 	screen = pygame.display.set_mode((width, height))
 	pygame.display.flip()
 	running = True
+	holding = False
+	old_keys = []
+	cur_key = ""
+	def reset_position():
+		connection.send_touch(
+			int(0 / 320 * 4096),
+			int(121 / 240 * 4096)
+		)
 	while running:
 		for event in pygame.event.get():
 			if event.type == pygame.QUIT:
@@ -209,13 +219,30 @@ if __name__ == '__main__':
 			if event.type == pygame.KEYDOWN:
 				keys = pygame.key.get_pressed()
 				for k, v in input_binding.items():
-					if keys[pygame.key.key_code(k)]:
+					if k not in old_keys and keys[pygame.key.key_code(k)]:
+						if holding:
+							reset_position()
 						connection.send_touch(
 							int(v['x'] / 320 * 4096),
 							int(v['y'] / 240 * 4096)
 						)
+						holding = True
+						old_keys.append(k)
+						cur_key = k
 						break
+				if keys[pygame.K_RIGHT]:
+					connection.send_button_oneshot(HidButtonCodes.RIGHT)
+				elif keys[pygame.K_LEFT]:
+					connection.send_button_oneshot(HidButtonCodes.LEFT)
+				elif keys[pygame.K_UP]:
+					connection.send_button_oneshot(HidButtonCodes.UP)
+				elif keys[pygame.K_DOWN]:
+					connection.send_button_oneshot(HidButtonCodes.DOWN)
 			if event.type == pygame.KEYUP:
-				connection.clear_touch()
+				if cur_key != '' and event.key == pygame.key.key_code(cur_key):
+					reset_position()
+					holding = False
+					old_keys = []
+					cur_key = ""
 
 	pygame.quit()
